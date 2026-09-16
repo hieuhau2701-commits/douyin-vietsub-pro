@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Douyin Auto-Vietsub Pro</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc; /* Slate 50 */
+            margin: 0;
+            overflow-x: hidden;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .douyin-gradient {
+            background: linear-gradient(45deg, #25f4ee, #fe2c55);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .douyin-btn {
+            background: linear-gradient(45deg, #25f4ee, #fe2c55);
+            transition: all 0.3s ease;
+        }
+        
+        .douyin-btn:hover {
+            box-shadow: 0 0 15px rgba(254, 44, 85, 0.5);
+            transform: translateY(-1px);
+        }
+
+        /* Loader Animation */
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border-left-color: #25f4ee;
+            border-right-color: #fe2c55;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        video::cue {
+            background-color: rgba(0, 0, 0, 0.8);
+            color: yellow;
+            font-size: 1.2rem;
+            text-shadow: 1px 1px 2px black;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Mock Data & Helper Functions --- //
+        
+        const MOCK_API_DELAY = 1500;
+
+        const MOCK_SINGLE_VIDEO = {
+            id: "731234567890",
+            title: "Học cách nấu món vịt quay Bắc Kinh siêu ngon tại nhà! #food #douyin",
+            author: "Chef Wang",
+            avatar: "https://placehold.co/100x100/25f4ee/ffffff?text=W",
+            cover: "https://placehold.co/400x600/1e293b/ffffff?text=Vit+Quay+Cover",
+            videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4", // Using a dummy open-source video for testing
+            duration: 10,
+            platform: "douyin"
+        };
+
+        const MOCK_CHANNEL_VIDEOS = Array.from({ length: 12 }).map((_, i) => ({
+            id: `v_${i}`,
+            title: `Video nấu ăn phần ${i + 1} siêu hấp dẫn...`,
+            cover: `https://placehold.co/200x300/${Math.floor(Math.random()*16777215).toString(16)}/ffffff?text=Video+${i+1}`,
+            videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+            status: 'idle' // idle, downloading, processing, done
+        }));
+
+        const MOCK_VIETSUB_VTT = `WEBVTT
+
+00:00:00.000 --> 00:00:03.000
+Chào mừng các bạn đến với kênh của tôi!
+
+00:00:03.500 --> 00:00:06.000
+Hôm nay chúng ta sẽ làm món vịt quay.
+
+00:00:06.500 --> 00:00:10.000
+Món này rất ngon và dễ làm tại nhà.
+`;
+
+        // --- UI Components --- //
+
+        // Toast Notification System
+        const Toast = ({ message, type, onClose }) => {
+            useEffect(() => {
+                const timer = setTimeout(onClose, 3000);
+                return () => clearTimeout(timer);
+            }, [onClose]);
+
+            const bgColor = type === 'error' ? 'bg-red-500' : 'bg-green-500';
+            const icon = type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-check';
+
+            return (
+                <div className={`fixed bottom-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 animate-bounce`}>
+                    <i className={`fa-solid ${icon}`}></i>
+                    <span className="font-medium">{message}</span>
+                </div>
+            );
+        };
+
+        const SingleVideoTab = ({ showToast }) => {
+            const [url, setUrl] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [videoData, setVideoData] = useState(null);
+            
+            const [processState, setProcessState] = useState(''); // '', 'extracting', 'translating', 'done'
+            const [subtitleUrl, setSubtitleUrl] = useState(null);
+            const videoRef = useRef(null);
+
+            const handleAnalyze = async () => {
+                if (!url) {
+                    showToast("Vui lòng nhập link video!", "error");
+                    return;
+                }
+                setLoading(true);
+                setVideoData(null);
+                setSubtitleUrl(null);
+                setProcessState('');
+
+                // MÔ PHỎNG GỌI API BACKEND: 
+                // Thực tế bạn sẽ dùng fetch(`YOUR_BACKEND_API/analyze?url=${url}`)
+                setTimeout(() => {
+                    setVideoData(MOCK_SINGLE_VIDEO);
+                    setLoading(false);
+                    showToast("Phân tích video thành công!", "success");
+                }, MOCK_API_DELAY);
+            };
+
+            const handleVietsubProcess = async () => {
+                setProcessState('extracting');
+                
+                // MÔ PHỎNG QUÁ TRÌNH XỬ LÝ VIETSUB TẠI BACKEND
+                setTimeout(() => {
+                    setProcessState('translating');
+                    setTimeout(() => {
+                        setProcessState('done');
+                        // Tạo blob URL cho file VTT để gắn vào video player
+                        const blob = new Blob([MOCK_VIETSUB_VTT], { type: 'text/vtt' });
+                        const url = URL.createObjectURL(blob);
+                        setSubtitleUrl(url);
+                        showToast("Tạo phụ đề Tiếng Việt thành công!", "success");
+                        
+                        if(videoRef.current) {
+                            videoRef.current.load();
+                            videoRef.current.play();
+                        }
+                    }, 2000);
+                }, 1500);
+            };
+
+            return (
+                <div className="animate-fade-in">
+                    <h2 className="text-2xl font-bold mb-6 text-white border-b border-slate-700 pb-2">Tải & Vietsub Video Lẻ</h2>
+                    
+                    {/* Input Area */}
+                    <div className="flex flex-col md:flex-row gap-4 mb-8">
+                        <div className="flex-1 relative">
+                            <i className="fa-brands fa-tiktok absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                            <input 
+                                type="text" 
+                                placeholder="Dán link Douyin, TikTok, Kuaishou vào đây..." 
+                                className="w-full bg-slate-800 border border-slate-600 rounded-xl py-3 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                                value={url}
+                                onChange={(e) => setUrl(e.target.value)}
+                            />
+                        </div>
+                        <button 
+                            onClick={handleAnalyze}
+                            disabled={loading}
+                            className="douyin-btn text-white font-bold py-3 px-8 rounded-xl flex items-center justify-center gap-2 min-w-[150px]"
+                        >
+                            {loading ? <div className="spinner"></div> : <><i className="fa-solid fa-magnifying-glass"></i> Phân tích</>}
+                        </button>
+                    </div>
+
+                    {/* Result Area */}
+                    {videoData && (
+                        <div className="glass-panel rounded-2xl p-6 flex flex-col lg:flex-row gap-8 items-start">
+                            {/* Video Player */}
+                            <div className="w-full lg:w-1/3 rounded-xl overflow-hidden shadow-2xl bg-black relative">
+                                <video 
+                                    ref={videoRef}
+                                    controls 
+                                    className="w-full h-auto max-h-[500px] object-contain"
+                                    crossOrigin="anonymous"
+                                    poster={videoData.cover}
+                                >
+                                    <source src={videoData.videoUrl} type="video/mp4" />
+                                    {subtitleUrl && (
+                                        <track label="Vietnamese" kind="subtitles" srcLang="vi" src={subtitleUrl} default />
+                                    )}
+                                    Trình duyệt của bạn không hỗ trợ thẻ video.
+                                </video>
+                            </div>
+
+                            {/* Info & Actions */}
+                            <div className="w-full lg:w-2/3 flex flex-col h-full">
+                                <div className="flex items-center gap-4 mb-4">
+                                    <img src={videoData.avatar} alt="Avatar" className="w-12 h-12 rounded-full border-2 border-[#25f4ee]" />
+                                    <div>
+                                        <h3 className="font-bold text-lg text-white">{videoData.author}</h3>
+                                        <span className="text-sm text-slate-400">Nguồn: {videoData.platform.toUpperCase()}</span>
+                                    </div>
+                                </div>
+                                <h1 className="text-xl text-slate-200 mb-6">{videoData.title}</h1>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-auto">
+                                    <button className="bg-slate-700 hover:bg-slate-600 text-white py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors">
+                                        <i className="fa-solid fa-download"></i> Tải Video Gốc (No Watermark)
+                                    </button>
+                                    
+                                    <button 
+                                        onClick={handleVietsubProcess}
+                                        disabled={processState !== '' && processState !== 'done'}
+                                        className="douyin-btn text-white py-3 px-4 rounded-xl flex items-center justify-center gap-2"
+                                    >
+                                        {processState === 'extracting' ? (
+                                            <><div className="spinner w-4 h-4"></div> Đang tách âm thanh...</>
+                                        ) : processState === 'translating' ? (
+                                            <><div className="spinner w-4 h-4"></div> AI Đang dịch sang Vietsub...</>
+                                        ) : processState === 'done' ? (
+                                            <><i className="fa-solid fa-check-circle"></i> Đã tạo Vietsub (Tải về)</>
+                                        ) : (
+                                            <><i className="fa-solid fa-language"></i> Tạo Vietsub Tự Động</>
+                                        )}
+                                    </button>
+                                </div>
+                                
+                                {processState === 'done' && (
+                                    <div className="mt-4 p-4 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm">
+                                        <i className="fa-solid fa-info-circle mr-2"></i> 
+                                        Phụ đề đã được gắn vào trình phát bên cạnh. Bấm Play để xem thử!
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const BatchDownloadTab = ({ showToast }) => {
+            const [profileUrl, setProfileUrl] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [videos, setVideos] = useState([]);
+            const [selectedIds, setSelectedIds] = useState(new Set());
+            const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+
+            const handleFetchProfile = () => {
+                if (!profileUrl) {
+                    showToast("Vui lòng nhập link Profile/Kênh!", "error");
+                    return;
+                }
+                setLoading(true);
+                
+                // MÔ PHỎNG API LẤY DANH SÁCH VIDEO TỪ KÊNH
+                setTimeout(() => {
+                    setVideos(MOCK_CHANNEL_VIDEOS);
+                    setLoading(false);
+                    showToast(`Đã tìm thấy ${MOCK_CHANNEL_VIDEOS.length} video.`, "success");
+                }, 2000);
+            };
+
+            const toggleSelect = (id) => {
+                const newSet = new Set(selectedIds);
+                if (newSet.has(id)) newSet.delete(id);
+                else newSet.add(id);
+                setSelectedIds(newSet);
+            };
+
+            const selectAll = () => {
+                if (selectedIds.size === videos.length) {
+                    setSelectedIds(newSet()); // unselect all
+                } else {
+                    setSelectedIds(new Set(videos.map(v => v.id)));
+                }
+            };
+
+            const handleBatchProcess = async () => {
+                if (selectedIds.size === 0) {
+                    showToast("Vui lòng chọn ít nhất 1 video để xử lý!", "error");
+                    return;
+                }
+                setIsProcessingBatch(true);
+                
+                // Cập nhật trạng thái videos
+                let updatedVideos = [...videos];
+                
+                // MÔ PHỎNG XỬ LÝ HÀNG LOẠT (Lặp qua từng video)
+                for (let id of selectedIds) {
+                    // Update to processing
+                    updatedVideos = updatedVideos.map(v => v.id === id ? {...v, status: 'processing'} : v);
+                    setVideos([...updatedVideos]);
+                    
+                    // Giả lập thời gian tải và dịch từng video
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    // Update to done
+                    updatedVideos = updatedVideos.map(v => v.id === id ? {...v, status: 'done'} : v);
+                    setVideos([...updatedVideos]);
+                }
+
+                setIsProcessingBatch(false);
+                showToast("Đã hoàn thành Vietsub hàng loạt!", "success");
+            };
+
+            return (
+                <div className="animate-fade-in">
+                    <h2 className="text-2xl font-bold mb-6 text-white border-b border-slate-700 pb-2">Tải & Vietsub Cả Kênh (Batch)</h2>
+                    
+                    {/* Input Area */}
+                    <div className="flex flex-col md:flex-row gap-4 mb-8">
+                        <div className="flex-1 relative">
+                            <i className="fa-solid fa-user absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                            <input 
+                                type="text" 
+                                placeholder="Dán link Profile (Kênh) Douyin vào đây..." 
+                                className="w-full bg-slate-800 border border-slate-600 rounded-xl py-3 pl-12 pr-4 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                                value={profileUrl}
+                                onChange={(e) => setProfileUrl(e.target.value)}
+                            />
+                        </div>
+                        <button 
+                            onClick={handleFetchProfile}
+                            disabled={loading}
+                            className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-xl flex items-center justify-center gap-2 min-w-[180px] transition-colors"
+                        >
+                            {loading ? <div className="spinner"></div> : <><i className="fa-solid fa-cloud-arrow-down"></i> Quét Kênh</>}
+                        </button>
+                    </div>
+
+                    {/* Videos Grid */}
+                    {videos.length > 0 && (
+                        <div className="glass-panel rounded-2xl p-6">
+                            <div className="flex justify-between items-center mb-6">
+                                <div className="text-slate-300">
+                                    Đã chọn: <strong className="text-white">{selectedIds.size}</strong> / {videos.length} video
+                                </div>
+                                <div className="flex gap-4">
+                                    <button onClick={selectAll} className="text-sm bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg transition-colors">
+                                        {selectedIds.size === videos.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                                    </button>
+                                    <button 
+                                        onClick={handleBatchProcess}
+                                        disabled={isProcessingBatch || selectedIds.size === 0}
+                                        className={`text-sm px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2
+                                            ${selectedIds.size === 0 ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'douyin-btn text-white'}
+                                        `}
+                                    >
+                                        {isProcessingBatch ? <><div className="spinner w-4 h-4"></div> Đang xử lý...</> : <><i className="fa-solid fa-wand-magic-sparkles"></i> Bắt đầu Vietsub</>}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4 h-[500px] overflow-y-auto pr-2">
+                                {videos.map(video => (
+                                    <div 
+                                        key={video.id} 
+                                        onClick={() => !isProcessingBatch && toggleSelect(video.id)}
+                                        className={`relative rounded-xl overflow-hidden cursor-pointer border-2 transition-all group
+                                            ${selectedIds.has(video.id) ? 'border-[#25f4ee]' : 'border-transparent hover:border-slate-500'}
+                                            ${video.status === 'processing' ? 'opacity-75' : ''}
+                                        `}
+                                    >
+                                        <img src={video.cover} alt="Cover" className="w-full aspect-[9/16] object-cover" />
+                                        
+                                        {/* Overlay for selection */}
+                                        <div className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity
+                                            ${selectedIds.has(video.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+                                        `}>
+                                            <i className={`fa-solid fa-circle-check text-4xl ${selectedIds.has(video.id) ? 'text-[#25f4ee]' : 'text-white/50'}`}></i>
+                                        </div>
+
+                                        {/* Status Overlay */}
+                                        {video.status === 'processing' && (
+                                            <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-10">
+                                                <div className="spinner mb-2"></div>
+                                                <span className="text-xs font-bold text-[#25f4ee]">Đang dịch...</span>
+                                            </div>
+                                        )}
+                                        {video.status === 'done' && (
+                                            <div className="absolute inset-0 bg-green-500/20 flex flex-col items-center justify-center z-10">
+                                                <i className="fa-solid fa-check text-4xl text-green-400 mb-2 drop-shadow-md"></i>
+                                                <span className="text-xs font-bold text-white bg-green-600 px-2 py-1 rounded">Đã Vietsub</span>
+                                            </div>
+                                        )}
+
+                                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-2">
+                                            <p className="text-xs text-white line-clamp-2">{video.title}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const SettingsTab = ({ showToast }) => {
+            const [apiKey, setApiKey] = useState('demo_key_xyz');
+            const [transApi, setTransApi] = useState('google');
+
+            const handleSave = () => {
+                showToast("Đã lưu cấu hình hệ thống!", "success");
+            };
+
+            return (
+                <div className="animate-fade-in max-w-2xl mx-auto">
+                    <h2 className="text-2xl font-bold mb-6 text-white border-b border-slate-700 pb-2">Cấu hình Hệ Thống & API</h2>
+                    
+                    <div className="glass-panel rounded-2xl p-8 space-y-6">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">API Key (Backend Downloader)</label>
+                            <input 
+                                type="password" 
+                                value={apiKey}
+                                onChange={(e) => setApiKey(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-4 text-white focus:outline-none focus:border-blue-500"
+                            />
+                            <p className="text-xs text-slate-500 mt-2">API dùng để kết nối với server lấy link tải video Douyin/TikTok gốc.</p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">Dịch vụ Dịch Thuật AI (Translation)</label>
+                            <select 
+                                value={transApi}
+                                onChange={(e) => setTransApi(e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 px-4 text-white focus:outline-none focus:border-blue-500"
+                            >
+                                <option value="google">Google Translate (Miễn phí, Tốc độ cao)</option>
+                                <option value="whisper">OpenAI Whisper + GPT-4 (Chính xác cao, Trả phí)</option>
+                                <option value="gemini">Google Gemini Pro (Cân bằng)</option>
+                            </select>
+                            <p className="text-xs text-slate-500 mt-2">Công cụ dịch từ giọng nói tiếng Trung sang phụ đề tiếng Việt.</p>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300 mb-2">Định dạng xuất file</label>
+                            <div className="flex gap-4">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="format" defaultChecked className="accent-blue-500" />
+                                    <span>Video + Phụ đề rời (.SRT / .VTT)</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer text-slate-500">
+                                    <input type="radio" name="format" disabled />
+                                    <span>Hardsub (Gắn chết chữ vào video - Cần server mạnh)</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <button onClick={handleSave} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors mt-4">
+                            Lưu Cấu Hình
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('single'); // single, batch, settings
+            const [toast, setToast] = useState(null); // { message, type }
+
+            const showToast = (message, type = 'success') => {
+                setToast({ message, type });
+            };
+
+            return (
+                <div className="flex h-screen bg-[#0f172a]">
+                    {/* Sidebar */}
+                    <div className="w-64 glass-panel border-r border-slate-700/50 flex flex-col h-full z-10 shadow-2xl">
+                        <div className="p-6">
+                            <h1 className="text-2xl font-black tracking-tight">
+                                <span className="douyin-gradient">Douyin</span>
+                                <br/>Vietsub Pro
+                            </h1>
+                            <p className="text-xs text-slate-400 mt-2">v2.0 Auto Translation</p>
+                        </div>
+
+                        <nav className="flex-1 px-4 space-y-2 mt-4">
+                            <button 
+                                onClick={() => setActiveTab('single')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium
+                                    ${activeTab === 'single' ? 'bg-slate-700 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                            >
+                                <i className="fa-solid fa-video w-5 text-center"></i> Video Lẻ
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('batch')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium
+                                    ${activeTab === 'batch' ? 'bg-slate-700 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                            >
+                                <i className="fa-solid fa-users w-5 text-center"></i> Tải Cả Kênh
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('settings')}
+                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium
+                                    ${activeTab === 'settings' ? 'bg-slate-700 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                            >
+                                <i className="fa-solid fa-gear w-5 text-center"></i> Cấu hình
+                            </button>
+                        </nav>
+
+                        <div className="p-4 border-t border-slate-700/50">
+                            <div className="bg-slate-800/50 p-4 rounded-xl text-center">
+                                <i className="fa-solid fa-server text-green-400 text-2xl mb-2"></i>
+                                <p className="text-sm font-medium text-slate-300">Server Status</p>
+                                <p className="text-xs text-green-400 mt-1">Online & Ready</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="flex-1 overflow-y-auto p-8 relative">
+                        {/* Background Decoration */}
+                        <div className="absolute top-0 right-0 w-96 h-96 bg-blue-500/10 rounded-full blur-[100px] pointer-events-none"></div>
+                        <div className="absolute bottom-0 left-1/4 w-96 h-96 bg-pink-500/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+                        <div className="max-w-6xl mx-auto relative z-10">
+                            {activeTab === 'single' && <SingleVideoTab showToast={showToast} />}
+                            {activeTab === 'batch' && <BatchDownloadTab showToast={showToast} />}
+                            {activeTab === 'settings' && <SettingsTab showToast={showToast} />}
+                        </div>
+                    </div>
+
+                    {/* Toast Overlay */}
+                    {toast && (
+                        <Toast 
+                            message={toast.message} 
+                            type={toast.type} 
+                            onClose={() => setToast(null)} 
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
